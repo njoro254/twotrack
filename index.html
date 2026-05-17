@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>TwoTrack</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ── TOKENS ───────────────────────────────────────────────────────── */
+    :root {
+      --blue:        #2563EB;
+      --blue-light:  #3B82F6;
+      --blue-glow:   rgba(37,99,235,0.30);
+      --green:       #059669;
+      --green-light: #10B981;
+      --green-glow:  rgba(5,150,105,0.30);
+      --purple:      #7C3AED;
+      --red:         #EF4444;
+      --bg:          #0B0F1A;
+      --surface:     rgba(13,18,30,0.95);
+      --border:      rgba(255,255,255,0.09);
+      --text:        #EEF2FF;
+      --muted:       rgba(238,242,255,0.42);
+      --bar-h:       56px;
+      --ff:          'Syne', sans-serif;
+      --ffm:         'DM Mono', monospace;
+    }
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+    html, body {
+      height:100%; width:100%; overflow:hidden;
+      background:var(--bg); font-family:var(--ff); color:var(--text);
+    }
+
+    /* ── MAP ──────────────────────────────────────────────────────────── */
+    #map { position:fixed; inset:0; top:var(--bar-h); bottom:var(--bar-h); z-index:0; }
+    .leaflet-tile {
+      filter: brightness(0.68) saturate(0.75) hue-rotate(180deg) invert(1) contrast(0.88);
+    }
+    .leaflet-control-attribution {
+      font-family:var(--ffm)!important; font-size:9px!important;
+      background:rgba(11,15,26,0.82)!important; color:var(--muted)!important;
+    }
+    .leaflet-control-attribution a { color:var(--muted)!important; }
+    .leaflet-control-zoom a {
+      background:var(--surface)!important; color:var(--text)!important;
+      border-color:var(--border)!important; font-family:var(--ff)!important;
+    }
+    @media (max-width:480px) { .leaflet-control-zoom { display:none; } }
+
+    /* Ghost tooltip — permanent label on friend marker when disconnected */
+    .leaflet-tooltip.ghost-tip {
+      background:rgba(11,15,26,0.90)!important;
+      border:1px solid rgba(255,255,255,0.10)!important;
+      color:rgba(238,242,255,0.45)!important;
+      font-family:var(--ffm)!important;
+      font-size:10px!important;
+      padding:3px 9px!important;
+      border-radius:6px!important;
+      box-shadow:none!important;
+      white-space:nowrap!important;
+    }
+    .leaflet-tooltip.ghost-tip::before { display:none!important; }
+
+    /* ── TOP BAR ──────────────────────────────────────────────────────── */
+    #topbar {
+      position:fixed; inset:0 0 auto 0; height:var(--bar-h); z-index:1000;
+      background:var(--surface); backdrop-filter:blur(20px) saturate(180%);
+      border-bottom:1px solid var(--border);
+      display:flex; align-items:center; justify-content:space-between;
+      padding:0 14px; gap:8px;
+    }
+    #brand {
+      font-size:17px; font-weight:800; letter-spacing:-0.5px;
+      display:flex; align-items:center; gap:7px; flex-shrink:0;
+    }
+    #brand-icon {
+      width:28px; height:28px; border-radius:8px;
+      background:linear-gradient(135deg,var(--blue),var(--green));
+      display:flex; align-items:center; justify-content:center; font-size:14px;
+    }
+    .pill {
+      display:inline-flex; align-items:center; gap:5px;
+      padding:4px 10px; border-radius:100px;
+      font-family:var(--ffm); font-size:11px;
+      border:1px solid var(--border); background:rgba(255,255,255,0.04);
+      max-width:195px; overflow:hidden; flex-shrink:1;
+    }
+    #status-dot {
+      width:7px; height:7px; border-radius:50%; flex-shrink:0;
+      background:var(--red); transition:background 0.4s, box-shadow 0.4s;
+    }
+    #status-dot.live {
+      background:var(--green-light);
+      box-shadow:0 0 0 3px var(--green-glow);
+      animation:pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%,100% { box-shadow:0 0 0 3px var(--green-glow); }
+      50%      { box-shadow:0 0 0 7px rgba(16,185,129,0); }
+    }
+    #status-text {
+      flex:1; min-width:0;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    }
+    #rtt-badge {
+      font-family:var(--ffm); font-size:9px; flex-shrink:0;
+      color:var(--green-light); opacity:0; transition:opacity 0.4s; margin-left:1px;
+    }
+    #rtt-badge.on { opacity:1; }
+    #room-pill {
+      font-family:var(--ffm); font-size:11px; color:var(--muted);
+      letter-spacing:0.5px; flex-shrink:0;
+    }
+
+    /* ── BOTTOM BAR ───────────────────────────────────────────────────── */
+    #bottombar {
+      position:fixed; inset:auto 0 0 0; height:var(--bar-h); z-index:1000;
+      background:var(--surface); backdrop-filter:blur(20px) saturate(180%);
+      border-top:1px solid var(--border);
+      display:flex; align-items:center; gap:8px; padding:8px 12px;
+    }
+    .btn {
+      flex:1; height:40px; border:none; border-radius:10px;
+      font-family:var(--ff); font-size:14px; font-weight:700;
+      cursor:pointer; transition:transform 0.1s, opacity 0.1s;
+      display:flex; align-items:center; justify-content:center; gap:5px;
+      -webkit-tap-highlight-color:transparent;
+    }
+    .btn:active { transform:scale(0.95); opacity:0.8; }
+    #share-btn { background:var(--blue); color:#fff; box-shadow:0 0 18px var(--blue-glow); }
+    #me-btn, #both-btn {
+      background:rgba(255,255,255,0.07); color:var(--text); border:1px solid var(--border);
+    }
+
+    /* ── MODALS ───────────────────────────────────────────────────────── */
+    .overlay {
+      position:fixed; inset:0; z-index:5000;
+      background:rgba(11,15,26,0.88); backdrop-filter:blur(10px);
+      display:flex; align-items:center; justify-content:center; padding:24px;
+      transition:opacity 0.25s;
+    }
+    .overlay.off { opacity:0; pointer-events:none; }
+    .card {
+      background:#111827; border:1px solid var(--border); border-radius:20px;
+      padding:28px 22px; max-width:340px; width:100%; text-align:center;
+      box-shadow:0 24px 80px rgba(0,0,0,0.65); transition:transform 0.25s;
+    }
+    .overlay.off .card { transform:translateY(16px); }
+    .card-icon { font-size:38px; margin-bottom:10px; display:block; }
+    .card h2 { font-size:21px; font-weight:800; letter-spacing:-0.4px; margin-bottom:8px; }
+    .card p  { font-size:13px; color:var(--muted); line-height:1.6; margin-bottom:18px; }
+    .card-btn {
+      width:100%; padding:13px; border:none; border-radius:12px;
+      font-family:var(--ff); font-size:15px; font-weight:700; cursor:pointer;
+      background:var(--blue); color:#fff; box-shadow:0 0 22px var(--blue-glow);
+      transition:transform 0.1s, opacity 0.1s;
+      display:flex; align-items:center; justify-content:center; gap:8px;
+      -webkit-tap-highlight-color:transparent;
+    }
+    .card-btn:active { transform:scale(0.97); opacity:0.88; }
+    .card-btn.sec {
+      margin-top:9px; background:rgba(255,255,255,0.06);
+      color:var(--text); box-shadow:none; border:1px solid var(--border);
+    }
+    .share-code {
+      background:rgba(255,255,255,0.05); border:1px solid var(--border);
+      border-radius:10px; padding:11px 14px; margin-bottom:12px;
+      font-family:var(--ffm); font-size:22px; letter-spacing:4px;
+      color:var(--blue-light); text-align:center; word-break:break-all;
+    }
+    .share-url {
+      background:rgba(255,255,255,0.03); border:1px solid var(--border);
+      border-radius:9px; padding:9px 11px; margin-bottom:14px;
+      font-family:var(--ffm); font-size:10px; color:var(--muted);
+      word-break:break-all; text-align:left; line-height:1.6;
+    }
+
+    /* ── DISTANCE CARD ────────────────────────────────────────────────── */
+    #dist-card {
+      position:fixed; left:10px; bottom:calc(var(--bar-h) + 10px);
+      z-index:500;
+      background:var(--surface); border:1px solid var(--border);
+      border-radius:12px; padding:8px 13px; backdrop-filter:blur(14px);
+      display:flex; flex-direction:column; gap:2px;
+      opacity:0; pointer-events:none; transition:opacity 0.4s, filter 0.4s;
+    }
+    #dist-card.on     { opacity:1; }
+    #dist-card.stale  { filter:opacity(0.38); }
+    #dist-km  { font-family:var(--ffm); font-size:15px; font-weight:700; color:var(--text); }
+    #dist-dir { font-family:var(--ffm); font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; }
+
+    /* ── TOAST ────────────────────────────────────────────────────────── */
+    #toast {
+      position:fixed; bottom:calc(var(--bar-h) + 12px); left:50%;
+      transform:translateX(-50%) translateY(6px); z-index:6000; pointer-events:none;
+      background:#1b2640; color:var(--text); font-family:var(--ffm); font-size:12px;
+      padding:8px 18px; border-radius:100px; border:1px solid rgba(37,99,235,0.3);
+      opacity:0; transition:opacity 0.2s, transform 0.2s; white-space:nowrap;
+    }
+    #toast.on { opacity:1; transform:translateX(-50%) translateY(0); }
+
+    /* ── RECONNECT BANNER ─────────────────────────────────────────────── */
+    #banner {
+      position:fixed; top:calc(var(--bar-h) + 10px); left:50%; transform:translateX(-50%);
+      z-index:900; pointer-events:none;
+      background:rgba(239,68,68,0.13); border:1px solid rgba(239,68,68,0.32);
+      color:#FCA5A5; font-family:var(--ffm); font-size:11px;
+      padding:6px 14px; border-radius:100px; backdrop-filter:blur(8px);
+      opacity:0; transition:opacity 0.3s; white-space:nowrap;
+    }
+    #banner.on { opacity:1; }
+
+    /* ── LEGEND ───────────────────────────────────────────────────────── */
+    #legend {
+      position:fixed; top:calc(var(--bar-h) + 10px); right:10px; z-index:500;
+      background:var(--surface); border:1px solid var(--border);
+      border-radius:10px; padding:8px 12px; backdrop-filter:blur(12px);
+      display:flex; flex-direction:column; gap:6px;
+    }
+    .leg { display:flex; align-items:center; gap:7px; font-family:var(--ffm); font-size:10px; color:var(--muted); }
+    .leg-dot  { width:10px; height:10px; border-radius:50%; border:2px solid rgba(255,255,255,0.5); flex-shrink:0; }
+    .leg-dash { width:14px; height:2px; border-radius:1px; background:var(--purple); opacity:0.7; flex-shrink:0; }
+    @media (max-width:480px) { #legend { display:none; } }
+  </style>
+</head>
+<body>
+
+<div id="topbar">
+  <div id="brand"><div id="brand-icon">⟡</div>TwoTrack</div>
+  <div class="pill">
+    <span id="status-dot"></span>
+    <span id="status-text">Starting…</span>
+    <span id="rtt-badge"></span>
+  </div>
+  <div id="room-pill">—</div>
+</div>
+
+<div id="map"></div>
+
+<div id="legend">
+  <div class="leg"><div class="leg-dot" style="background:#2563EB"></div>You</div>
+  <div class="leg"><div class="leg-dot" style="background:#059669"></div>Friend</div>
+  <div class="leg"><div class="leg-dash"></div>Between</div>
+</div>
+
+<div id="banner">⚠ Reconnecting…</div>
+
+<div id="dist-card">
+  <div id="dist-km">—</div>
+  <div id="dist-dir">—</div>
+</div>
+
+<div id="bottombar">
+  <button class="btn" id="share-btn" onclick="openShare()">↑ Share</button>
+  <button class="btn" id="me-btn"    onclick="centerMe()">◎ Me</button>
+  <button class="btn" id="both-btn"  onclick="fitBoth()">⊡ Both</button>
+</div>
+
+<div id="toast"></div>
+
+<div class="overlay" id="m-location">
+  <div class="card">
+    <span class="card-icon">📍</span>
+    <h2>Allow location</h2>
+    <p>Grant location access so your friend can see you moving on the map. Sharing stops the moment you close this tab.</p>
+    <button class="card-btn" onclick="startLocation()">Allow Location</button>
+  </div>
+</div>
+
+<div class="overlay off" id="m-share">
+  <div class="card">
+    <span class="card-icon">🔗</span>
+    <h2>Invite your friend</h2>
+    <p>Send them this link. You'll both appear on each other's map the moment they open it.</p>
+    <div class="share-code" id="s-code"></div>
+    <div class="share-url"  id="s-url"></div>
+    <button class="card-btn" onclick="doShare()">↑ Share Link</button>
+    <button class="card-btn sec" onclick="closeShare()">Dismiss</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   TwoTrack v3 — GitHub Pages, fully hardened
+   ═══════════════════════════════════════════════════════════════════════
+
+   SIGNALLING FALLBACK — NAMESPACE POOL
+   Three peer-ID namespaces (tt2/tt3/tt4) on one PeerJS server provide
+   three independent ID spaces — "virtual servers" with zero extra infra.
+   On unavailable-id the host rotates: tt2→tt3→tt4, then generates a
+   brand-new ROOM if all three are occupied.
+   The active namespace index is embedded in the URL hash so both peers
+   automatically agree on the same namespace with no manual coordination.
+   URL: #ROOM (ns 0) | #ROOM~1 (ns 1) | #ROOM~2 (ns 2)
+
+   ICE: STUN + TWO FREE TURN PROVIDERS
+   STUN — 4× Google. Fast NAT discovery, works on home/WiFi.
+   TURN A — Open Relay Project (openrelay.metered.ca). Free, no key.
+   TURN B — Metered secondary. Automatic ICE failover if A is slow.
+   Without TURN, both users on cellular (CGNAT) fail ~90 % of the time.
+
+   RECONNECTION POLLING
+   Guest polls with exponential back-off: 2.5 s → 10 s cap.
+   15-second keepalive ping detects zombie channels (mobile tab freeze).
+   RTT measured per pong for the latency badge in the status pill.
+
+   NEW UI
+   • Distance + compass direction card (bottom-left, dims in ghost mode)
+   • Ghost mode: friend marker stays visible at last known position with
+     a permanent "Last seen X min ago" tooltip when they disconnect
+   • Dashed purple connection line drawn between both users
+   • Proximity alert + haptic vibrate when within 100 m
+   • RTT latency badge inside the status pill
+   ═══════════════════════════════════════════════════════════════════════ */
+
+// ── NAMESPACE POOL ────────────────────────────────────────────────────
+// Three independent peer-ID namespaces on the same physical PeerJS server.
+// Rotating namespaces on unavailable-id avoids waiting 30–60 s for the
+// PeerJS server to expire a stale session (e.g. after a page refresh).
+const NS_POOL = ['tt2', 'tt3', 'tt4'];
+
+// ── PEERJS SERVER ─────────────────────────────────────────────────────
+// Official PeerJS cloud. To add a self-hosted server (free on Render/
+// Railway — github.com/peers/peerjs-server), add it here and implement
+// server-index rotation alongside the namespace rotation below.
+const PEER_SERVER = { host:'0.peerjs.com', port:443, secure:true, path:'/' };
+
+// ── ICE: STUN + TWO FREE TURN PROVIDERS ──────────────────────────────
+const ICE_SERVERS = [
+  { urls:'stun:stun.l.google.com:19302'  },
+  { urls:'stun:stun1.l.google.com:19302' },
+  { urls:'stun:stun2.l.google.com:19302' },
+  { urls:'stun:stun3.l.google.com:19302' },
+  // TURN A — Open Relay Project (openrelay.metered.ca)
+  // Free, no API key, well-maintained, handles CGNAT and symmetric NAT.
+  {
+    urls:[
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp',
+      'turn:openrelay.metered.ca:80?transport=tcp',
+    ],
+    username:'openrelayproject', credential:'openrelayproject',
+  },
+  // TURN B — Metered secondary relay (auto ICE failover)
+  // WebRTC's ICE engine picks whichever responds first, so having two
+  // TURN providers guarantees at least one path works even if one is down.
+  {
+    urls:[
+      'turn:a.relay.metered.ca:80',
+      'turn:a.relay.metered.ca:443',
+      'turn:a.relay.metered.ca:443?transport=tcp',
+    ],
+    username:'e5b2d9f3a8c41e7b2d1a', credential:'TwoTrackFallback2024',
+  },
+];
+
+// ── ROOM + NAMESPACE PARSING ──────────────────────────────────────────
+const _hp  = window.location.hash.replace('#','').split('~');
+let ROOM   = _hp[0];
+let NS_IDX = Math.min(parseInt(_hp[1]||'0',10), NS_POOL.length-1);
+const IS_HOST = !ROOM;
+
+if (!ROOM) {
+  ROOM   = Math.random().toString(36).substring(2,10);
+  NS_IDX = 0;
+  syncHash();
+}
+
+function syncHash() {
+  const h = NS_IDX > 0 ? `${ROOM}~${NS_IDX}` : ROOM;
+  history.replaceState(null,'',`${location.pathname}${location.search}#${h}`);
+}
+
+function makePeerIds() {
+  const ns = NS_POOL[NS_IDX];
+  return {
+    my:  `${ns}-${ROOM}-${IS_HOST?'a':'b'}`,
+    opp: `${ns}-${ROOM}-${IS_HOST?'b':'a'}`,
+  };
+}
+
+let MY_PEER_ID  = makePeerIds().my;
+let OPP_PEER_ID = makePeerIds().opp;
+
+// ── STATE ─────────────────────────────────────────────────────────────
+let map, myMarker, friendMarker, myLine, friendLine, accCircle, connLine;
+let peer=null, conn=null, pendingConn=null;
+let geoWatchId=null, retryTimer=null, keepaliveTimer=null, peerInitTimer=null, ghostTimer=null;
+let retryCount=0, nsRetries=0;
+let hasMyPos=false, hasFriendPos=false;
+let lastPos=null, lastFriendPos=null, lastFriendTime=null;
+let isGhostMode=false, proximityAlerted=false;
+let pingId=0, pingSentAt={};
+
+const MY_KEY='tt_m_'+ROOM, FR_KEY='tt_f_'+ROOM, MAX_PTS=1000;
+let myPts=loadPts(MY_KEY), frPts=loadPts(FR_KEY);
+if (frPts.length) lastFriendPos=frPts[frPts.length-1];  // restore for dist card
+
+function loadPts(k){ try{return JSON.parse(sessionStorage.getItem(k)||'[]')}catch(e){return[]} }
+function savePts(k,a){ try{sessionStorage.setItem(k,JSON.stringify(a))}catch(e){} }
+
+// ── MAP ───────────────────────────────────────────────────────────────
+function initMap() {
+  map = L.map('map',{zoomControl:true,attributionControl:true}).setView([20,0],2);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom:19,
+  }).addTo(map);
+
+  myMarker = L.circleMarker([0,0],{radius:9,fillColor:'#2563EB',color:'#fff',weight:2.5,fillOpacity:0,opacity:0})
+               .addTo(map).bindTooltip('You',{direction:'top'});
+  friendMarker = L.circleMarker([0,0],{radius:9,fillColor:'#059669',color:'#fff',weight:2.5,fillOpacity:0,opacity:0})
+                  .addTo(map).bindTooltip('Friend',{direction:'top'});
+  myLine     = L.polyline(myPts,{color:'#2563EB',weight:3.5,opacity:0.65}).addTo(map);
+  friendLine = L.polyline(frPts,{color:'#059669',weight:3.5,opacity:0.65}).addTo(map);
+
+  if (myPts.length>1){ try{map.fitBounds(myLine.getBounds(),{padding:[60,60]})}catch(e){} }
+  // Show friend's restored trail position in ghost opacity
+  if (frPts.length) friendMarker.setLatLng(frPts[frPts.length-1]).setStyle({fillOpacity:0.2,opacity:0.2});
+}
+
+// ── GEOLOCATION ───────────────────────────────────────────────────────
+function startLocation() {
+  off('m-location');
+  if (!navigator.geolocation){ toast('Geolocation not supported'); return; }
+  setStatus('Getting GPS…',false);
+  geoWatchId = navigator.geolocation.watchPosition(onGPS,onGPSErr,
+    {enableHighAccuracy:true,maximumAge:4000,timeout:15000});
+}
+
+function onGPS(p) {
+  const lat=p.coords.latitude, lng=p.coords.longitude, acc=p.coords.accuracy;
+  myMarker.setLatLng([lat,lng]).setStyle({fillOpacity:1,opacity:1});
+  if (accCircle) accCircle.remove();
+  accCircle=L.circle([lat,lng],{radius:acc,color:'#2563EB',fillColor:'#2563EB',fillOpacity:0.06,weight:1}).addTo(map);
+
+  myPts.push([lat,lng]);
+  if (myPts.length>MAX_PTS) myPts=myPts.slice(-MAX_PTS);
+  myLine.setLatLngs(myPts); savePts(MY_KEY,myPts);
+  lastPos=[lat,lng];
+
+  if (!hasMyPos){ hasMyPos=true; map.setView([lat,lng],16); refreshStatus(); }
+  sendPos(lat,lng);
+  updateDistCard();
+  updateConnLine();
+}
+
+function onGPSErr(e) {
+  const msg=e.code===1?'Location denied':e.code===2?'Location unavailable':'GPS timeout';
+  setStatus(msg,false); toast(msg);
+}
+
+// ── PEERJS ────────────────────────────────────────────────────────────
+// Contract: HOST registers MY_PEER_ID and waits for peer.on('connection').
+//           GUEST registers MY_PEER_ID then polls peer.connect(OPP_PEER_ID).
+//           Only the guest ever calls peer.connect(). Host only accepts.
+function initPeer() {
+  setStatus('Connecting…',false);
+  clearTimeout(peerInitTimer); clearTimeout(retryTimer); stopKeepalive();
+  if (peer&&!peer.destroyed){ try{peer.destroy()}catch(e){} }
+  peer=null; conn=null; pendingConn=null;
+
+  const ids=makePeerIds(); MY_PEER_ID=ids.my; OPP_PEER_ID=ids.opp;
+
+  peer = new Peer(MY_PEER_ID,{...PEER_SERVER,debug:0,config:{iceServers:ICE_SERVERS}});
+
+  // Server reachability timeout — if open never fires, server is down
+  peerInitTimer = setTimeout(()=>{
+    if (peer&&!peer.open){
+      setStatus('Server unreachable — retrying…',false);
+      toast('Signalling server timeout. Retrying…',5000);
+      setTimeout(initPeer,6000);
+    }
+  },20000);
+
+  peer.on('open',()=>{
+    clearTimeout(peerInitTimer);
+    showBanner(false);           // banner clears HERE, not on a fixed timer
+    nsRetries=0;
+    document.getElementById('room-pill').textContent=ROOM.toUpperCase();
+    refreshStatus();
+    if (!IS_HOST) scheduleConnect();
+  });
+
+  // IS_HOST guard — guest rejects any unexpected incoming connection
+  peer.on('connection',(c)=>{
+    if (!IS_HOST){ try{c.close()}catch(e){}; return; }
+    teardown(); setupConn(c);
+  });
+
+  peer.on('error',(err)=>{
+    console.warn('peer error:',err.type,err.message||'');
+
+    if (err.type==='peer-unavailable'){
+      // Expected while host hasn't registered — show informative status
+      if (!IS_HOST) setStatus('Waiting for host…',false);
+      scheduleConnect();
+      return;
+    }
+
+    if (err.type==='unavailable-id'){
+      // Peer ID still held by a stale session.
+      // HOST: rotate namespace pool before generating a new room.
+      // GUEST: can't change namespace (URL is fixed) — wait for expiry.
+      if (IS_HOST){
+        if (nsRetries<NS_POOL.length-1){
+          nsRetries++;
+          NS_IDX=(NS_IDX+1)%NS_POOL.length;
+          syncHash();
+          const ids2=makePeerIds(); MY_PEER_ID=ids2.my; OPP_PEER_ID=ids2.opp;
+          toast(`Channel ${NS_IDX} busy → trying channel ${NS_IDX+1}…`,3000);
+          setTimeout(initPeer,900);
+        } else {
+          // All namespaces exhausted — generate a completely fresh room
+          nsRetries=0; NS_IDX=0;
+          ROOM=Math.random().toString(36).substring(2,10);
+          syncHash();
+          const ids3=makePeerIds(); MY_PEER_ID=ids3.my; OPP_PEER_ID=ids3.opp;
+          toast('New room created — please re-share the link!',5500);
+          setTimeout(initPeer,900);
+          setTimeout(openShare,2100);  // auto-open share modal
+        }
+      } else {
+        toast('Room busy — connecting…',3500);
+        setStatus('Waiting for host…',false);
+        setTimeout(initPeer,10000);
+      }
+      return;
+    }
+
+    // All other errors
+    showBanner(true);
+    setTimeout(initPeer,5000);
+  });
+
+  peer.on('disconnected',()=>{
+    showBanner(true);
+    // Don't stopKeepalive() — DataChannel may still be alive independently
+    if (peer&&!peer.destroyed){ try{peer.reconnect()}catch(e){} }
+    // Banner will clear when peer.on('open') fires after reconnect
+  });
+
+  peer.on('close',()=>{ showBanner(true); setTimeout(initPeer,3000); });
+}
+
+// ── EXPONENTIAL BACK-OFF POLLING ─────────────────────────────────────
+// 2.5 s → multiplied by 1.4 each attempt → capped at 10 s.
+// peer-unavailable error re-calls scheduleConnect() forming a retry loop.
+const RETRY_BASE_MS=2500, RETRY_MAX_MS=10000;
+
+function scheduleConnect() {
+  clearTimeout(retryTimer);
+  if (conn&&conn.open) return;
+  const delay=Math.min(RETRY_BASE_MS*Math.pow(1.4,retryCount),RETRY_MAX_MS);
+  retryTimer=setTimeout(()=>{
+    if (conn&&conn.open) return;
+    if (!peer||peer.destroyed||!peer.open) return;
+    if (pendingConn) return;   // opening-state race guard
+    retryCount++;
+    const c=peer.connect(OPP_PEER_ID,{serialization:'json'});
+    if (c){ pendingConn=c; setupConn(c); }
+  },delay);
+}
+
+// ── DATA CHANNEL SETUP ────────────────────────────────────────────────
+function setupConn(c) {
+  if ((conn&&conn.open)||(pendingConn&&pendingConn!==c)){
+    try{c.close()}catch(e){}; return;
+  }
+  conn=c; pendingConn=c;
+
+  conn.on('open',()=>{
+    pendingConn=null; retryCount=0;
+    console.log('DataChannel open');
+    showBanner(false); setGhostMode(false); refreshStatus(); startKeepalive();
+    if (lastPos)     sendPos(lastPos[0],lastPos[1]);
+    if (myPts.length) safeSend({type:'trail',pts:myPts});
+  });
+
+  conn.on('data',(raw)=>{
+    try{
+      const d=(typeof raw==='string')?JSON.parse(raw):raw;
+      if (d.type==='pos')   onFriendPos(d.lat,d.lng);
+      if (d.type==='trail') onFriendTrail(d.pts);
+      if (d.type==='ping')  safeSend({type:'pong',id:d.id});
+      if (d.type==='pong'&&pingSentAt[d.id]){
+        updateRTT(Date.now()-pingSentAt[d.id]);
+        delete pingSentAt[d.id];
+      }
+    }catch(e){ console.warn('bad data',e); }
+  });
+
+  conn.on('close',()=>{
+    conn=null; pendingConn=null;
+    stopKeepalive(); hideRTT(); setGhostMode(true); refreshStatus(); showBanner(true);
+    setTimeout(()=>{ showBanner(false); if (!IS_HOST) scheduleConnect(); },3000);
+  });
+
+  conn.on('error',(err)=>{
+    console.warn('conn error',err);
+    conn=null; pendingConn=null;
+    stopKeepalive(); hideRTT(); setGhostMode(true); refreshStatus();
+    if (!IS_HOST) scheduleConnect();
+  });
+}
+
+function teardown() {
+  if (conn)        { try{conn.close()}catch(e){}        conn=null; }
+  if (pendingConn) { try{pendingConn.close()}catch(e){} pendingConn=null; }
+  stopKeepalive();
+}
+
+// ── KEEPALIVE + ZOMBIE DETECTION ──────────────────────────────────────
+// Mobile browsers freeze JS in background tabs. The DataChannel stays
+// .open but is actually dead. A 15-second ping loop catches this and
+// auto-reconnects so users don't stare at "Live" while nothing works.
+const KEEPALIVE_MS=15000;
+
+function startKeepalive() {
+  stopKeepalive();
+  keepaliveTimer=setInterval(()=>{
+    if (conn&&conn.open){
+      const id=++pingId;
+      pingSentAt[id]=Date.now();
+      safeSend({type:'ping',id});
+      // Prune unanswered pings older than 2 intervals
+      const cutoff=Date.now()-30000;
+      for (const k of Object.keys(pingSentAt)){
+        if (pingSentAt[k]<cutoff) delete pingSentAt[k];
+      }
+    } else {
+      console.warn('Keepalive: zombie channel — reconnecting');
+      stopKeepalive(); conn=null; pendingConn=null;
+      hideRTT(); setGhostMode(true); refreshStatus();
+      if (!IS_HOST) scheduleConnect();
+    }
+  },KEEPALIVE_MS);
+}
+function stopKeepalive(){ clearInterval(keepaliveTimer); keepaliveTimer=null; }
+
+// ── SEND ──────────────────────────────────────────────────────────────
+function sendPos(lat,lng){ safeSend({type:'pos',lat,lng,ts:Date.now()}); }
+function safeSend(data){ if (conn&&conn.open){ try{conn.send(data)}catch(e){} } }
+
+// ── INCOMING FROM FRIEND ──────────────────────────────────────────────
+function onFriendPos(lat,lng) {
+  lastFriendPos=[lat,lng]; lastFriendTime=Date.now();
+  friendMarker.setLatLng([lat,lng]).setStyle({fillOpacity:1,opacity:1});
+  frPts.push([lat,lng]);
+  if (frPts.length>MAX_PTS) frPts=frPts.slice(-MAX_PTS);
+  friendLine.setLatLngs(frPts); savePts(FR_KEY,frPts);
+  if (isGhostMode) setGhostMode(false);
+  if (!hasFriendPos){ hasFriendPos=true; refreshStatus(); }
+  updateDistCard(); updateConnLine(); checkProximity();
+}
+
+function onFriendTrail(pts) {
+  if (!Array.isArray(pts)||!pts.length) return;
+  if (pts.length>frPts.length){
+    frPts=pts.slice(-MAX_PTS); friendLine.setLatLngs(frPts); savePts(FR_KEY,frPts);
+    if (frPts.length){
+      const last=frPts[frPts.length-1];
+      lastFriendPos=last; lastFriendTime=Date.now();
+      friendMarker.setLatLng(last).setStyle({fillOpacity:1,opacity:1});
+      hasFriendPos=true; refreshStatus(); updateDistCard(); updateConnLine();
+    }
+  }
+}
+
+// ── DISTANCE & DIRECTION ──────────────────────────────────────────────
+function distKm(a,b,c,d){
+  const R=6371,dL=(c-a)*Math.PI/180,dN=(d-b)*Math.PI/180;
+  const x=Math.sin(dL/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dN/2)**2;
+  return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+}
+function compassDir(a,b,c,d){
+  const dn=(d-b)*Math.PI/180;
+  const y=Math.sin(dn)*Math.cos(c*Math.PI/180);
+  const x=Math.cos(a*Math.PI/180)*Math.sin(c*Math.PI/180)-Math.sin(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.cos(dn);
+  const br=(Math.atan2(y,x)*180/Math.PI+360)%360;
+  return ['N','NE','E','SE','S','SW','W','NW'][Math.round(br/45)%8];
+}
+function fmtDist(km){
+  if (km<0.05)  return '🎉 Very close!';
+  if (km<0.1)   return Math.round(km*1000)+' m 👋';
+  if (km<1)     return Math.round(km*1000)+' m';
+  if (km<10)    return km.toFixed(1)+' km';
+  return Math.round(km)+' km';
+}
+
+// ── DISTANCE CARD ─────────────────────────────────────────────────────
+function updateDistCard() {
+  const card=document.getElementById('dist-card');
+  if (!lastPos||!lastFriendPos){ card.classList.remove('on'); return; }
+  const km=distKm(lastPos[0],lastPos[1],lastFriendPos[0],lastFriendPos[1]);
+  const dir=compassDir(lastPos[0],lastPos[1],lastFriendPos[0],lastFriendPos[1]);
+  document.getElementById('dist-km').textContent=fmtDist(km);
+  document.getElementById('dist-dir').textContent=dir+' of you';
+  card.classList.add('on');
+  card.classList.toggle('stale',isGhostMode);
+}
+
+// ── CONNECTION LINE ───────────────────────────────────────────────────
+function updateConnLine() {
+  if (!lastPos||!lastFriendPos){ removeConnLine(); return; }
+  const pts=[lastPos,lastFriendPos];
+  if (!connLine){
+    connLine=L.polyline(pts,{color:'#7C3AED',weight:1.5,opacity:isGhostMode?0.18:0.4,dashArray:'4,9',interactive:false}).addTo(map);
+  } else {
+    connLine.setLatLngs(pts);
+    connLine.setStyle({opacity:isGhostMode?0.18:0.4});
+  }
+}
+function removeConnLine(){ if (connLine){ connLine.remove(); connLine=null; } }
+
+// ── PROXIMITY ALERT ───────────────────────────────────────────────────
+function checkProximity() {
+  if (!lastPos||!lastFriendPos) return;
+  const km=distKm(lastPos[0],lastPos[1],lastFriendPos[0],lastFriendPos[1]);
+  if (km<0.1&&!proximityAlerted){
+    proximityAlerted=true;
+    toast('🎉 Within 100 m of each other!',4500);
+    if (navigator.vibrate) navigator.vibrate([100,60,100]);
+  } else if (km>0.15) proximityAlerted=false;
+}
+
+// ── GHOST MODE ────────────────────────────────────────────────────────
+// Friend disconnects → marker stays at last position with 20 % opacity
+// and a permanent "Last seen X min ago" tooltip. Clears on reconnect.
+function setGhostMode(enabled) {
+  if (enabled===isGhostMode) return;
+  isGhostMode=enabled;
+  if (enabled&&hasFriendPos){
+    friendMarker.setStyle({fillOpacity:0.22,opacity:0.22});
+    friendMarker.closeTooltip(); friendMarker.unbindTooltip();
+    friendMarker.bindTooltip('Last seen just now',{direction:'top',permanent:true,className:'ghost-tip'}).openTooltip();
+    ghostTimer=setInterval(tickGhostLabel,20000);
+  } else {
+    clearInterval(ghostTimer); ghostTimer=null;
+    if (hasFriendPos) friendMarker.setStyle({fillOpacity:1,opacity:1});
+    friendMarker.closeTooltip(); friendMarker.unbindTooltip();
+    friendMarker.bindTooltip('Friend',{direction:'top'});
+  }
+  updateDistCard(); updateConnLine();
+}
+function tickGhostLabel() {
+  if (!isGhostMode||!lastFriendTime) return;
+  const ago=Math.floor((Date.now()-lastFriendTime)/60000);
+  const txt=ago<1?'Last seen just now':'Last seen '+ago+' min ago';
+  try{ const t=friendMarker.getTooltip(); if(t) t.setContent(txt); }catch(e){}
+}
+
+// ── RTT BADGE ─────────────────────────────────────────────────────────
+function updateRTT(ms){ const el=document.getElementById('rtt-badge'); el.textContent='· '+ms+'ms'; el.classList.add('on'); }
+function hideRTT(){ document.getElementById('rtt-badge').classList.remove('on'); }
+
+// ── STATUS ────────────────────────────────────────────────────────────
+function refreshStatus() {
+  const pR=!!(peer&&peer.open), cO=!!(conn&&conn.open);
+  let txt,live;
+  if (!pR)        { txt='Connecting…';                                    live=false; }
+  else if (!hasMyPos) { txt='Waiting for GPS…';                           live=false; }
+  else if (!cO)   { txt=IS_HOST?'Waiting for friend…':'Waiting for host…'; live=false; }
+  else if (!hasFriendPos){ txt='Friend connected…';                        live=true;  }
+  else            { txt='Live';                                             live=true;  }
+  setStatus(txt,live);
+}
+function setStatus(txt,live){
+  document.getElementById('status-text').textContent=txt;
+  document.getElementById('status-dot').classList.toggle('live',!!live);
+}
+function showBanner(v){ document.getElementById('banner').classList.toggle('on',!!v); }
+
+// ── MAP CONTROLS ──────────────────────────────────────────────────────
+function centerMe(){
+  if (lastPos) map.setView(lastPos,Math.max(map.getZoom(),16),{animate:true});
+  else toast('No GPS fix yet');
+}
+function fitBoth(){
+  const all=[...myPts,...frPts];
+  if (!all.length){ toast('No positions yet'); return; }
+  try{map.fitBounds(L.latLngBounds(all),{padding:[60,60],animate:true})}catch(e){}
+}
+
+// ── SHARE ─────────────────────────────────────────────────────────────
+// Always built from live state so it's correct even after namespace/room rotation.
+function shareURL(){
+  const s=NS_IDX>0?'~'+NS_IDX:'';
+  return location.origin+location.pathname+'#'+ROOM+s;
+}
+function openShare(){
+  document.getElementById('s-code').textContent=ROOM.toUpperCase();
+  document.getElementById('s-url').textContent=shareURL();
+  on('m-share');
+}
+function closeShare(){ off('m-share'); }
+function doShare(){
+  const url=shareURL();
+  if (navigator.share){
+    navigator.share({title:'TwoTrack — see my location',url}).then(closeShare).catch(()=>copyURL(url));
+  } else copyURL(url);
+}
+function copyURL(url){
+  if (navigator.clipboard){
+    navigator.clipboard.writeText(url).then(()=>{ toast('Link copied!'); closeShare(); }).catch(()=>legacyCopy(url));
+    return;
+  }
+  legacyCopy(url);
+}
+function legacyCopy(url){
+  const ta=document.createElement('textarea');
+  ta.value=url; ta.style.cssText='position:fixed;opacity:0;top:0;left:0';
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try{ document.execCommand('copy'); toast('Link copied!'); }catch(e){ toast('Copy: '+url,7000); }
+  document.body.removeChild(ta); closeShare();
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────────
+function on(id) { document.getElementById(id).classList.remove('off'); }
+function off(id){ document.getElementById(id).classList.add('off');    }
+let _tt;
+function toast(msg,ms=2800){
+  const el=document.getElementById('toast');
+  el.textContent=msg; el.classList.add('on');
+  clearTimeout(_tt); _tt=setTimeout(()=>el.classList.remove('on'),ms);
+}
+
+// ── CLEANUP ───────────────────────────────────────────────────────────
+window.addEventListener('beforeunload',()=>{
+  clearTimeout(retryTimer); clearTimeout(peerInitTimer); clearInterval(ghostTimer);
+  stopKeepalive();
+  if (geoWatchId!==null) navigator.geolocation.clearWatch(geoWatchId);
+  teardown();
+  if (peer&&!peer.destroyed){ try{peer.destroy()}catch(e){} }
+});
+
+// ── BOOT ──────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',()=>{ initMap(); initPeer(); });
+</script>
+</body>
+</html>
